@@ -4,8 +4,8 @@ import MainScene from './game/scene/MainScene'
 
 const config = {
   type: Phaser.AUTO,
-  width: 390,
-  height: 844,
+  width: 844,
+  height: 390,
   backgroundColor: '#1a1a1a',
   parent: 'game-container',
   pixelArt: true,

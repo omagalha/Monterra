@@ -1,3 +1,5 @@
+import Phaser from 'phaser'
+
 export function createCompanion(scene, x, y) {
   const container = scene.add.container(x, y)
 
@@ -19,6 +21,18 @@ export function createCompanion(scene, x, y) {
 
   container.add([shadow, tail, body, head, ear1, ear2, eye])
   container.setScale(1.4)
+
+  container.setAppearance = (color) => {
+    const dark = Phaser.Display.Color.ValueToColor(color)
+    dark.darken(20)
+    const darkColor = dark.color
+
+    body.setFillStyle(darkColor)
+    tail.setFillStyle(darkColor)
+    head.setFillStyle(color)
+    ear1.setFillStyle(color)
+    ear2.setFillStyle(color)
+  }
 
   return container
 }

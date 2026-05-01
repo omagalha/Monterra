@@ -3,13 +3,13 @@ export function createInteractionPrompt(scene) {
 
   prompt.isVisible = false
 
-  prompt.bg = scene.add.rectangle(195, 670, 250, 42, 0x111111, 0.88)
+  prompt.bg = scene.add.rectangle(422, 354, 250, 42, 0x111111, 0.88)
     .setStrokeStyle(2, 0xffffff)
     .setScrollFactor(0)
     .setDepth(15)
     .setVisible(false)
 
-  prompt.text = scene.add.text(195, 670, '', {
+  prompt.text = scene.add.text(422, 354, '', {
     fontSize: '14px',
     color: '#ffffff',
     fontFamily: 'monospace'

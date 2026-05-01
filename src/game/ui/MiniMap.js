@@ -1,7 +1,7 @@
 export function createMiniMap(scene, worldWidth, worldHeight) {
   const miniMap = {}
 
-  const PANEL_X = 265
+  const PANEL_X = 720
   const PANEL_Y = 14
   const PANEL_W = 110
   const PANEL_H = 110

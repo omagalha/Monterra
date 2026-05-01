@@ -13,6 +13,10 @@ import { createQuestTracker } from '../ui/QuestTracker'
 import { createMiniMap } from '../ui/MiniMap'
 import { createInteractionPrompt } from '../ui/InteractionPrompt'
 import { forestZones } from '../maps/forest/zones'
+import { applyPlayerAttack } from '../systems/CombatSystem'
+import { updateEnemyAI } from '../systems/EnemyAISystem'
+import { updateEnemyVisibility } from '../systems/EnemyVisibilitySystem'
+import { canCapture, attemptCapture } from '../systems/CaptureSystem'
 import itemsSpriteUrl from '../../assets/icons/items.png'
 
 export default class MainScene extends Phaser.Scene {
@@ -20,6 +24,7 @@ export default class MainScene extends Phaser.Scene {
   currentMap = null
 
   mapObjects = []
+  staticMapObjects = []
   mapExits = []
   mapExitLabels = []
 
@@ -65,6 +70,16 @@ export default class MainScene extends Phaser.Scene {
   interactionPrompt
   nearbyNpc = null
   nearbyExit = null
+  nearbyCapturable = null
+
+  capturedCreatures = []
+  activeCreature = null
+
+  pendingRespawns = []
+
+  targetEnemy = null
+  lastAutoAttackTime = 0
+  targetRing = null
 
   currentZone = null
   currentZoneText = null
@@ -118,10 +133,15 @@ export default class MainScene extends Phaser.Scene {
     this.currentZoneText.setDepth(50)
     this.currentZoneText.setVisible(false)
 
-    this.transitionOverlay = this.add.rectangle(195, 422, 390, 844, 0x000000)
+    this.transitionOverlay = this.add.rectangle(422, 195, 844, 390, 0x000000)
       .setScrollFactor(0)
       .setDepth(999)
       .setAlpha(0)
+
+    this.targetRing = this.add.circle(0, 0, 26, 0x000000, 0)
+    this.targetRing.setStrokeStyle(2, 0xfacc15, 0.9)
+    this.targetRing.setDepth(4)
+    this.targetRing.setVisible(false)
 
     this.interactKey = this.input.keyboard.addKeys({
       e: Phaser.Input.Keyboard.KeyCodes.E,
@@ -136,7 +156,8 @@ export default class MainScene extends Phaser.Scene {
       this.inventory.setVisible(!this.inventory.visible)
     })
 
-    this.cameras.main.startFollow(this.player, true, 0.08, 0.08)
+    this.cameras.main.setZoom(0.65)
+    this.cameras.main.startFollow(this.player, true, 0.04, 0.04)
 
     this.loadMap(this.currentMapId)
   }
@@ -192,15 +213,20 @@ export default class MainScene extends Phaser.Scene {
       }
     }
 
-    const followSpeed = 0.04
+    const followSpeed = this.activeCreature
+      ? 0.03 + this.activeCreature.speed * 0.03
+      : 0.04
     this.companion.x += (this.player.x - 35 - this.companion.x) * followSpeed
     this.companion.y += (this.player.y + 25 - this.companion.y) * followSpeed
 
     this.updateEnemies()
     this.checkEnemyDamage(time)
+    this.updateAutoAttack(time)
+    this.checkRespawns()
     this.checkDrops()
     this.updateInteractionPrompt()
     this.checkNpcInteraction()
+    this.checkCaptureInteraction()
     this.checkMapExits()
   }
 
@@ -241,6 +267,9 @@ export default class MainScene extends Phaser.Scene {
     this.mapObjects.forEach((obj) => obj.destroy())
     this.mapObjects = []
 
+    this.staticMapObjects.forEach((obj) => obj.destroy())
+    this.staticMapObjects = []
+
     this.mapExits.forEach((exit) => exit.destroy())
     this.mapExits = []
 
@@ -263,6 +292,11 @@ export default class MainScene extends Phaser.Scene {
     this.collisionZones.forEach((zone) => zone.destroy())
     this.collisionZones = []
 
+    this.pendingRespawns = []
+
+    this.targetEnemy = null
+    if (this.targetRing) this.targetRing.setVisible(false)
+
     if (this.miniMap) {
       this.miniMap.destroy()
       this.miniMap = null
@@ -284,7 +318,7 @@ export default class MainScene extends Phaser.Scene {
       config.worldHeight,
       config.background
     ).setDepth(-1)
-    this.mapObjects.push(bg)
+    this.addStaticMapObject(bg)
 
     if (config.id === 'town') {
       const roadHorizontal = this.add.rectangle(
@@ -303,7 +337,7 @@ export default class MainScene extends Phaser.Scene {
         0xc89b5a
       )
 
-      this.mapObjects.push(roadHorizontal, roadVertical)
+      this.addStaticMapObject(roadHorizontal, roadVertical)
     }
 
     const title = this.add.text(30, 30, config.name, {
@@ -312,7 +346,7 @@ export default class MainScene extends Phaser.Scene {
       fontFamily: 'monospace'
     })
     title.setScrollFactor(0)
-    this.mapObjects.push(title)
+    this.addStaticMapObject(title)
 
     if (config.id === 'town') {
       this.drawTownDecoration()
@@ -326,8 +360,16 @@ export default class MainScene extends Phaser.Scene {
   createCollisionZone(x, y, width, height) {
     const zone = this.add.zone(x, y, width, height)
     zone.setOrigin(0.5)
+    zone.setActive(false)
     this.collisionZones.push(zone)
     return zone
+  }
+
+  addStaticMapObject(...objects) {
+    objects.forEach((obj) => {
+      obj.setActive?.(false)
+      this.staticMapObjects.push(obj)
+    })
   }
 
   isCollidingAt(x, y) {
@@ -344,419 +386,337 @@ export default class MainScene extends Phaser.Scene {
     })
   }
 
-  createHouse(x, y) {
-    const body = this.add.rectangle(x, y, 180, 120, 0x8b5a2b)
-    const roof = this.add.rectangle(x, y - 50, 200, 42, 0x5a2d14)
-    const door = this.add.rectangle(x, y + 24, 28, 46, 0x4a2f1a)
-    const windowLeft = this.add.rectangle(x - 45, y, 26, 26, 0x93c5fd)
-    const windowRight = this.add.rectangle(x + 45, y, 26, 26, 0x93c5fd)
+  drawHouse(g, x, y) {
+    g.fillStyle(0x8b5a2b)
+    g.fillRect(x - 90, y - 60, 180, 120)
+    g.lineStyle(3, 0x5b3718)
+    g.strokeRect(x - 90, y - 60, 180, 120)
 
-    body.setStrokeStyle(3, 0x5b3718)
-    roof.setStrokeStyle(3, 0x2f1408)
-    door.setStrokeStyle(2, 0x2b1a0d)
-    windowLeft.setStrokeStyle(2, 0x1e3a8a)
-    windowRight.setStrokeStyle(2, 0x1e3a8a)
+    g.fillStyle(0x5a2d14)
+    g.fillRect(x - 100, y - 71, 200, 42)
+    g.lineStyle(3, 0x2f1408)
+    g.strokeRect(x - 100, y - 71, 200, 42)
 
-    this.mapObjects.push(body, roof, door, windowLeft, windowRight)
+    g.fillStyle(0x4a2f1a)
+    g.fillRect(x - 14, y + 1, 28, 46)
+    g.lineStyle(2, 0x2b1a0d)
+    g.strokeRect(x - 14, y + 1, 28, 46)
+
+    g.fillStyle(0x93c5fd)
+    g.fillRect(x - 58, y - 13, 26, 26)
+    g.lineStyle(2, 0x1e3a8a)
+    g.strokeRect(x - 58, y - 13, 26, 26)
+
+    g.fillStyle(0x93c5fd)
+    g.fillRect(x + 32, y - 13, 26, 26)
+    g.lineStyle(2, 0x1e3a8a)
+    g.strokeRect(x + 32, y - 13, 26, 26)
+
     this.createCollisionZone(x, y + 10, 180, 110)
   }
 
-  createTree(x, y) {
-    const trunk = this.add.rectangle(x, y + 22, 18, 34, 0x6b3f1d)
-    const leavesMain = this.add.circle(x, y, 30, 0x166534)
-    const leavesLeft = this.add.circle(x - 18, y + 10, 22, 0x15803d)
-    const leavesRight = this.add.circle(x + 18, y + 10, 22, 0x15803d)
+  drawTree(g, x, y) {
+    g.fillStyle(0x6b3f1d)
+    g.fillRect(x - 9, y + 5, 18, 34)
+    g.lineStyle(2, 0x3b220f)
+    g.strokeRect(x - 9, y + 5, 18, 34)
 
-    trunk.setStrokeStyle(2, 0x3b220f)
-    leavesMain.setStrokeStyle(2, 0x0b3b1d)
+    g.fillStyle(0x15803d)
+    g.fillCircle(x - 18, y + 10, 22)
+    g.fillCircle(x + 18, y + 10, 22)
 
-    this.mapObjects.push(trunk, leavesMain, leavesLeft, leavesRight)
+    g.fillStyle(0x166534)
+    g.fillCircle(x, y, 30)
+    g.lineStyle(2, 0x0b3b1d)
+    g.strokeCircle(x, y, 30)
+
     this.createCollisionZone(x, y + 12, 56, 60)
   }
 
-  createFenceRow(startX, y, amount) {
+  drawFenceRow(g, startX, y, amount) {
     for (let i = 0; i < amount; i++) {
-      const fence = this.add.rectangle(startX + i * 24, y, 16, 28, 0xd6b37a)
-      fence.setStrokeStyle(2, 0x7c4a21)
-      this.mapObjects.push(fence)
+      const fx = startX + i * 24
+      g.fillStyle(0xd6b37a)
+      g.fillRect(fx - 8, y - 14, 16, 28)
+      g.lineStyle(2, 0x7c4a21)
+      g.strokeRect(fx - 8, y - 14, 16, 28)
     }
   }
 
-  createFlower(x, y) {
-    const center = this.add.circle(x, y, 4, 0xfacc15)
-    const petal1 = this.add.circle(x - 6, y, 4, 0xf472b6)
-    const petal2 = this.add.circle(x + 6, y, 4, 0xf472b6)
-    const petal3 = this.add.circle(x, y - 6, 4, 0xf472b6)
-    const petal4 = this.add.circle(x, y + 6, 4, 0xf472b6)
-
-    this.mapObjects.push(center, petal1, petal2, petal3, petal4)
+  drawFlower(g, x, y) {
+    g.fillStyle(0xf472b6)
+    g.fillCircle(x - 6, y, 4)
+    g.fillCircle(x + 6, y, 4)
+    g.fillCircle(x, y - 6, 4)
+    g.fillCircle(x, y + 6, 4)
+    g.fillStyle(0xfacc15)
+    g.fillCircle(x, y, 4)
   }
 
-  createRock(x, y) {
-    const rock = this.add.ellipse(x, y, 34, 24, 0x8d99ae)
-    rock.setStrokeStyle(2, 0x5c677d)
-    this.mapObjects.push(rock)
-
+  drawRock(g, x, y) {
+    g.fillStyle(0x8d99ae)
+    g.fillEllipse(x, y, 34, 24)
+    g.lineStyle(2, 0x5c677d)
+    g.strokeEllipse(x, y, 34, 24)
     this.createCollisionZone(x, y, 28, 20)
   }
 
-  createPathRect(x, y, width, height, color = 0xb98a4a) {
-    const path = this.add.rectangle(x, y, width, height, color)
-    path.setStrokeStyle(3, 0x7a5428)
-    this.mapObjects.push(path)
-    return path
+  drawPathRect(g, x, y, width, height, color = 0xb98a4a) {
+    g.fillStyle(color)
+    g.fillRect(x - width / 2, y - height / 2, width, height)
+    g.lineStyle(3, 0x7a5428)
+    g.strokeRect(x - width / 2, y - height / 2, width, height)
   }
 
-  createPathEllipse(x, y, width, height, color = 0xb98a4a) {
-    const path = this.add.ellipse(x, y, width, height, color)
-    path.setStrokeStyle(3, 0x7a5428)
-    this.mapObjects.push(path)
-    return path
+  drawPathEllipse(g, x, y, width, height, color = 0xb98a4a) {
+    g.fillStyle(color)
+    g.fillEllipse(x, y, width, height)
+    g.lineStyle(3, 0x7a5428)
+    g.strokeEllipse(x, y, width, height)
   }
 
-  createGroundPatch(x, y, width, height, color = 0x3f8f55, alpha = 1) {
-    const patch = this.add.ellipse(x, y, width, height, color, alpha)
-    patch.setStrokeStyle(2, 0x2d5a36, 0.35)
-    this.mapObjects.push(patch)
-    return patch
+  drawGroundPatch(g, x, y, width, height, color = 0x3f8f55, alpha = 1) {
+    g.fillStyle(color, alpha)
+    g.fillEllipse(x, y, width, height)
+    g.lineStyle(2, 0x2d5a36, 0.35)
+    g.strokeEllipse(x, y, width, height)
   }
 
-  createTreeCluster(positions) {
-    positions.forEach(([x, y]) => this.createTree(x, y))
-  }
-
-  createRockCluster(positions) {
-    positions.forEach(([x, y]) => this.createRock(x, y))
-  }
-
-  createFlowerPatch(positions) {
-    positions.forEach(([x, y]) => this.createFlower(x, y))
-  }
-
-  createForestPond(x, y, width, height, collisionWidth, collisionHeight) {
-    const pond = this.add.ellipse(x, y, width, height, 0x4dabf7)
-    pond.setStrokeStyle(4, 0x1d4ed8)
-
-    const pondInner = this.add.ellipse(x, y, width * 0.72, height * 0.62, 0x7dd3fc)
-
-    this.mapObjects.push(pond, pondInner)
+  drawPond(g, x, y, width, height, collisionWidth, collisionHeight) {
+    g.fillStyle(0x4dabf7)
+    g.fillEllipse(x, y, width, height)
+    g.lineStyle(4, 0x1d4ed8)
+    g.strokeEllipse(x, y, width, height)
+    g.fillStyle(0x7dd3fc)
+    g.fillEllipse(x, y, width * 0.72, height * 0.62)
     this.createCollisionZone(x, y, collisionWidth, collisionHeight)
+  }
 
-    return pond
+  drawTreeCluster(g, positions) {
+    positions.forEach(([x, y]) => this.drawTree(g, x, y))
+  }
+
+  drawRockCluster(g, positions) {
+    positions.forEach(([x, y]) => this.drawRock(g, x, y))
+  }
+
+  drawFlowerPatch(g, positions) {
+    positions.forEach(([x, y]) => this.drawFlower(g, x, y))
   }
 
   drawTownDecoration() {
-    this.createHouse(250, 260)
-    this.createHouse(920, 260)
-    this.createHouse(260, 930)
+    const g = this.add.graphics()
+    this.addStaticMapObject(g)
 
-    const pond = this.add.ellipse(920, 880, 180, 120, 0x4dabf7)
-    pond.setStrokeStyle(4, 0x1d4ed8)
-    const pondInner = this.add.ellipse(920, 880, 130, 80, 0x7dd3fc)
-    this.mapObjects.push(pond, pondInner)
-    this.createCollisionZone(920, 880, 150, 90)
+    this.drawHouse(g, 250, 260)
+    this.drawHouse(g, 920, 260)
+    this.drawHouse(g, 260, 930)
 
-    this.createTree(120, 140)
-    this.createTree(150, 420)
-    this.createTree(1080, 150)
-    this.createTree(1030, 420)
-    this.createTree(160, 1080)
-    this.createTree(1020, 1040)
-    this.createTree(920, 1040)
+    this.drawPond(g, 920, 880, 180, 120, 150, 90)
 
-    this.createFenceRow(470, 340, 6)
-    this.createFenceRow(810, 340, 5)
-    this.createFenceRow(170, 860, 4)
+    this.drawTree(g, 120, 140)
+    this.drawTree(g, 150, 420)
+    this.drawTree(g, 1080, 150)
+    this.drawTree(g, 1030, 420)
+    this.drawTree(g, 160, 1080)
+    this.drawTree(g, 1020, 1040)
+    this.drawTree(g, 920, 1040)
 
-    this.createFlower(820, 760)
-    this.createFlower(860, 740)
-    this.createFlower(980, 760)
-    this.createFlower(1010, 920)
-    this.createFlower(870, 940)
+    this.drawFenceRow(g, 470, 340, 6)
+    this.drawFenceRow(g, 810, 340, 5)
+    this.drawFenceRow(g, 170, 860, 4)
+
+    this.drawFlower(g, 820, 760)
+    this.drawFlower(g, 860, 740)
+    this.drawFlower(g, 980, 760)
+    this.drawFlower(g, 1010, 920)
+    this.drawFlower(g, 870, 940)
 
     // this.drawCollisionDebug()
   }
 
   drawForestDecoration() {
-    this.drawForestTerrain()
-    this.drawForestPaths()
-    this.drawForestWater()
+    const g = this.add.graphics()
+    this.addStaticMapObject(g)
 
-    this.drawForestSouthEntry()
-    this.drawForestLowerTrail()
-    this.drawForestCentralClearing()
-    this.drawForestWestCaveRoute()
-    this.drawForestEastMountainRoute()
-    this.drawForestDenseWilds()
-    this.drawForestDeepNorth()
-    this.drawForestNorthernCrown()
+    this.drawForestTerrain(g)
+    this.drawForestPaths(g)
+    this.drawForestWater(g)
 
-    // Use durante desenvolvimento para validar colisões
+    this.drawForestSouthEntry(g)
+    this.drawForestLowerTrail(g)
+    this.drawForestCentralClearing(g)
+    this.drawForestWestCaveRoute(g)
+    this.drawForestEastMountainRoute(g)
+    this.drawForestDenseWilds(g)
+    this.drawForestDeepNorth(g)
+    this.drawForestNorthernCrown(g)
+
     // this.drawCollisionDebug()
-
-    // Use quando adicionar o debug das zonas
     // this.drawForestZoneDebug()
   }
 
-  drawForestTerrain() {
-    // Grandes manchas de variação no solo.
-    // Isso evita que o mapa grande pareça uma cor chapada.
-    this.createGroundPatch(1200, 2580, 900, 520, 0x3f8f55, 0.55)
-    this.createGroundPatch(1200, 2100, 1050, 620, 0x4f9a5f, 0.75)
-    this.createGroundPatch(560, 1680, 760, 520, 0x3a7f4d, 0.7)
-    this.createGroundPatch(1800, 1260, 760, 560, 0x376f45, 0.75)
-    this.createGroundPatch(1200, 1460, 1180, 640, 0x356b43, 0.75)
-    this.createGroundPatch(1200, 820, 1220, 520, 0x2f623d, 0.82)
-    this.createGroundPatch(1200, 300, 1020, 320, 0x294f34, 0.88)
+  drawForestTerrain(g) {
+    this.drawGroundPatch(g, 1200, 2580, 900, 520, 0x3f8f55, 0.55)
+    this.drawGroundPatch(g, 1200, 2100, 1050, 620, 0x4f9a5f, 0.75)
+    this.drawGroundPatch(g, 560, 1680, 760, 520, 0x3a7f4d, 0.7)
+    this.drawGroundPatch(g, 1800, 1260, 760, 560, 0x376f45, 0.75)
+    this.drawGroundPatch(g, 1200, 1460, 1180, 640, 0x356b43, 0.75)
+    this.drawGroundPatch(g, 1200, 820, 1220, 520, 0x2f623d, 0.82)
+    this.drawGroundPatch(g, 1200, 300, 1020, 320, 0x294f34, 0.88)
   }
 
-  drawForestPaths() {
-    // Entrada da cidade para dentro da floresta
-    this.createPathRect(1200, 3020, 360, 230)
-    this.createPathRect(1200, 2670, 240, 560)
-
-    // Trilha baixa
-    this.createPathEllipse(1200, 2420, 460, 220)
-    this.createPathRect(1200, 2220, 210, 360)
-
-    // Clareira central
-    this.createPathEllipse(1200, 2050, 760, 360)
-
-    // Bifurcação oeste para caverna
-    this.createPathRect(760, 1780, 720, 130)
-    this.createPathEllipse(520, 1680, 420, 240)
-
-    // Subida central para mata densa
-    this.createPathRect(1200, 1650, 190, 440)
-    this.createPathEllipse(1200, 1440, 520, 240)
-
-    // Rota leste para montanha
-    this.createPathRect(1660, 1320, 680, 120)
-    this.createPathEllipse(1900, 1180, 460, 260)
-
-    // Passagem para floresta profunda
-    this.createPathRect(1200, 1050, 170, 500)
-    this.createPathEllipse(1200, 820, 520, 240)
-
-    // Topo selvagem
-    this.createPathRect(1200, 520, 150, 350)
-    this.createPathEllipse(1200, 300, 520, 220)
+  drawForestPaths(g) {
+    this.drawPathRect(g, 1200, 3020, 360, 230)
+    this.drawPathRect(g, 1200, 2670, 240, 560)
+    this.drawPathEllipse(g, 1200, 2420, 460, 220)
+    this.drawPathRect(g, 1200, 2220, 210, 360)
+    this.drawPathEllipse(g, 1200, 2050, 760, 360)
+    this.drawPathRect(g, 760, 1780, 720, 130)
+    this.drawPathEllipse(g, 520, 1680, 420, 240)
+    this.drawPathRect(g, 1200, 1650, 190, 440)
+    this.drawPathEllipse(g, 1200, 1440, 520, 240)
+    this.drawPathRect(g, 1660, 1320, 680, 120)
+    this.drawPathEllipse(g, 1900, 1180, 460, 260)
+    this.drawPathRect(g, 1200, 1050, 170, 500)
+    this.drawPathEllipse(g, 1200, 820, 520, 240)
+    this.drawPathRect(g, 1200, 520, 150, 350)
+    this.drawPathEllipse(g, 1200, 300, 520, 220)
   }
 
-  drawForestWater() {
-    // Lago principal perto da clareira
-    this.createForestPond(1540, 2180, 300, 180, 230, 125)
-
-    // Lago menor na mata densa
-    this.createForestPond(760, 1320, 220, 140, 170, 95)
-
-    // Água pequena no norte para dar sensação de área mais rara
-    this.createForestPond(1540, 720, 220, 130, 165, 90)
+  drawForestWater(g) {
+    this.drawPond(g, 1540, 2180, 300, 180, 230, 125)
+    this.drawPond(g, 760, 1320, 220, 140, 170, 95)
+    this.drawPond(g, 1540, 720, 220, 130, 165, 90)
   }
 
-  drawForestSouthEntry() {
-    this.createTreeCluster([
+  drawForestSouthEntry(g) {
+    this.drawTreeCluster(g, [
       [260, 3000], [420, 2920], [620, 3060],
       [1780, 3060], [1980, 2920], [2160, 3000],
-
       [360, 2780], [560, 2700],
       [1840, 2700], [2040, 2780]
     ])
-
-    this.createRockCluster([
-      [980, 2940],
-      [1420, 2940],
-      [900, 2780],
-      [1500, 2760]
+    this.drawRockCluster(g, [
+      [980, 2940], [1420, 2940], [900, 2780], [1500, 2760]
     ])
-
-    this.createFlowerPatch([
-      [1080, 2920],
-      [1160, 2860],
-      [1280, 2900],
-      [1340, 2820]
+    this.drawFlowerPatch(g, [
+      [1080, 2920], [1160, 2860], [1280, 2900], [1340, 2820]
     ])
   }
 
-  drawForestLowerTrail() {
-    this.createTreeCluster([
+  drawForestLowerTrail(g) {
+    this.drawTreeCluster(g, [
       [760, 2580], [860, 2480], [760, 2360],
       [1640, 2580], [1540, 2480], [1640, 2360],
-
       [620, 2280], [720, 2160],
       [1680, 2160], [1780, 2280]
     ])
-
-    this.createRockCluster([
-      [1020, 2480],
-      [1380, 2460],
-      [980, 2260],
-      [1420, 2240]
+    this.drawRockCluster(g, [
+      [1020, 2480], [1380, 2460], [980, 2260], [1420, 2240]
     ])
-
-    this.createFlowerPatch([
-      [1120, 2520],
-      [1260, 2500],
-      [1160, 2320],
-      [1320, 2320]
+    this.drawFlowerPatch(g, [
+      [1120, 2520], [1260, 2500], [1160, 2320], [1320, 2320]
     ])
   }
 
-  drawForestCentralClearing() {
-    // A clareira precisa respirar: menos árvores no centro e mais borda natural.
-    this.createTreeCluster([
+  drawForestCentralClearing(g) {
+    this.drawTreeCluster(g, [
       [620, 2160], [700, 2020], [760, 1900],
       [1760, 2160], [1680, 2020], [1620, 1900],
-
       [860, 1780], [1020, 1720],
       [1380, 1720], [1540, 1780],
-
       [700, 2300], [880, 2360],
       [1520, 2360], [1700, 2300]
     ])
-
-    this.createRockCluster([
-      [920, 2100],
-      [1040, 1980],
-      [1360, 2020],
-      [1420, 2180],
-      [1500, 2260]
+    this.drawRockCluster(g, [
+      [920, 2100], [1040, 1980], [1360, 2020], [1420, 2180], [1500, 2260]
     ])
-
-    this.createFlowerPatch([
-      [1040, 2120],
-      [1140, 2060],
-      [1260, 2080],
-      [1320, 2160],
-      [1160, 2220],
-      [1460, 2100]
+    this.drawFlowerPatch(g, [
+      [1040, 2120], [1140, 2060], [1260, 2080],
+      [1320, 2160], [1160, 2220], [1460, 2100]
     ])
   }
 
-  drawForestWestCaveRoute() {
-    this.createTreeCluster([
+  drawForestWestCaveRoute(g) {
+    this.drawTreeCluster(g, [
       [220, 1380], [360, 1340], [520, 1380],
       [220, 1980], [380, 2020], [560, 1960],
-
       [760, 1500], [840, 1620], [760, 1860],
       [420, 1500], [360, 1820]
     ])
-
-    this.createRockCluster([
-      [360, 1660],
-      [500, 1560],
-      [640, 1740],
-      [780, 1800]
+    this.drawRockCluster(g, [
+      [360, 1660], [500, 1560], [640, 1740], [780, 1800]
     ])
-
-    this.createFlowerPatch([
-      [520, 1760],
-      [620, 1660],
-      [700, 1580]
+    this.drawFlowerPatch(g, [
+      [520, 1760], [620, 1660], [700, 1580]
     ])
   }
 
-  drawForestEastMountainRoute() {
-    this.createTreeCluster([
+  drawForestEastMountainRoute(g) {
+    this.drawTreeCluster(g, [
       [1540, 980], [1680, 900], [1840, 900],
       [2040, 960], [2160, 1060],
-
       [1520, 1540], [1680, 1600],
       [1900, 1540], [2080, 1460]
     ])
-
-    this.createRockCluster([
-      [1640, 1240],
-      [1780, 1160],
-      [1960, 1260],
-      [2080, 1160],
-      [1840, 1420]
+    this.drawRockCluster(g, [
+      [1640, 1240], [1780, 1160], [1960, 1260], [2080, 1160], [1840, 1420]
     ])
-
-    this.createFlowerPatch([
-      [1740, 1320],
-      [1880, 1340],
-      [1980, 1220]
+    this.drawFlowerPatch(g, [
+      [1740, 1320], [1880, 1340], [1980, 1220]
     ])
   }
 
-  drawForestDenseWilds() {
-    this.createTreeCluster([
+  drawForestDenseWilds(g) {
+    this.drawTreeCluster(g, [
       [540, 1120], [660, 1040], [820, 1100],
       [980, 1060], [1140, 1120], [1300, 1060],
       [1460, 1100], [1620, 1040], [1800, 1120],
-
       [520, 1540], [680, 1600], [860, 1540],
       [1540, 1540], [1720, 1600], [1880, 1540],
-
       [900, 1260], [1040, 1220], [1360, 1220], [1500, 1280]
     ])
-
-    this.createRockCluster([
-      [960, 1460],
-      [1120, 1360],
-      [1320, 1460],
-      [1480, 1360],
-      [700, 1240]
+    this.drawRockCluster(g, [
+      [960, 1460], [1120, 1360], [1320, 1460], [1480, 1360], [700, 1240]
     ])
-
-    this.createFlowerPatch([
-      [1040, 1520],
-      [1220, 1480],
-      [1400, 1520]
+    this.drawFlowerPatch(g, [
+      [1040, 1520], [1220, 1480], [1400, 1520]
     ])
   }
 
-  drawForestDeepNorth() {
-    this.createTreeCluster([
+  drawForestDeepNorth(g) {
+    this.drawTreeCluster(g, [
       [420, 620], [560, 540], [720, 600],
       [880, 520], [1040, 560], [1200, 500],
       [1360, 560], [1520, 520], [1680, 600],
       [1840, 540], [1980, 620],
-
       [520, 880], [700, 960], [900, 900],
       [1500, 900], [1700, 960], [1880, 880],
-
       [760, 740], [940, 700], [1460, 700], [1640, 760]
     ])
-
-    this.createRockCluster([
-      [860, 820],
-      [1040, 760],
-      [1340, 800],
-      [1500, 860],
-      [1180, 940]
+    this.drawRockCluster(g, [
+      [860, 820], [1040, 760], [1340, 800], [1500, 860], [1180, 940]
     ])
-
-    this.createFlowerPatch([
-      [980, 880],
-      [1240, 860],
-      [1400, 940]
+    this.drawFlowerPatch(g, [
+      [980, 880], [1240, 860], [1400, 940]
     ])
   }
 
-  drawForestNorthernCrown() {
-    this.createTreeCluster([
+  drawForestNorthernCrown(g) {
+    this.drawTreeCluster(g, [
       [360, 180], [520, 260], [700, 180],
       [880, 260], [1040, 180], [1200, 260],
       [1360, 180], [1520, 260], [1700, 180],
       [1880, 260], [2040, 180],
-
       [620, 420], [820, 460], [1020, 430],
       [1380, 430], [1580, 460], [1780, 420]
     ])
-
-    this.createRockCluster([
-      [980, 300],
-      [1160, 240],
-      [1320, 320],
-      [1480, 260]
+    this.drawRockCluster(g, [
+      [980, 300], [1160, 240], [1320, 320], [1480, 260]
     ])
-
-    this.createFlowerPatch([
-      [1080, 380],
-      [1240, 360],
-      [1400, 390]
+    this.drawFlowerPatch(g, [
+      [1080, 380], [1240, 360], [1400, 390]
     ])
   }
 
@@ -774,7 +734,7 @@ export default class MainScene extends Phaser.Scene {
       )
 
       rect.setStrokeStyle(2, 0xffffff, 0.18)
-      this.mapObjects.push(rect)
+      this.addStaticMapObject(rect)
 
       const label = this.add.text(
         x + 12,
@@ -788,7 +748,7 @@ export default class MainScene extends Phaser.Scene {
         }
       )
 
-      this.mapObjects.push(label)
+      this.addStaticMapObject(label)
     })
   }
 
@@ -848,7 +808,7 @@ export default class MainScene extends Phaser.Scene {
     this.collisionZones.forEach((zone) => {
       const rect = this.add.rectangle(zone.x, zone.y, zone.width, zone.height, 0xff0000, 0.15)
       rect.setStrokeStyle(1, 0xff0000)
-      this.mapObjects.push(rect)
+      this.addStaticMapObject(rect)
     })
   }
 
@@ -856,6 +816,7 @@ export default class MainScene extends Phaser.Scene {
     exits.forEach((exitData) => {
       const exitZone = this.add.zone(exitData.x, exitData.y, exitData.width, exitData.height)
       exitZone.exitData = exitData
+      exitZone.setActive(false)
 
       const visual = this.add.rectangle(
         exitData.x,
@@ -877,9 +838,10 @@ export default class MainScene extends Phaser.Scene {
           backgroundColor: '#00000055'
         }
       )
+      label.setActive(false)
 
       this.mapExits.push(exitZone)
-      this.mapObjects.push(visual)
+      this.addStaticMapObject(visual)
       this.mapExitLabels.push(label)
     })
   }
@@ -908,8 +870,19 @@ export default class MainScene extends Phaser.Scene {
       )
     ) ?? null
 
+    this.nearbyCapturable = this.enemies.find((enemy) => {
+      if (!enemy.active || enemy.hp <= 0) return false
+      if (!canCapture(enemy)) return false
+      return Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y) < 65
+    }) ?? null
+
     if (this.nearbyNpc) {
       this.interactionPrompt.show('E para conversar')
+      return
+    }
+
+    if (this.nearbyCapturable) {
+      this.interactionPrompt.show(`E para capturar ${this.nearbyCapturable.name}`)
       return
     }
 
@@ -924,6 +897,7 @@ export default class MainScene extends Phaser.Scene {
   checkMapExits() {
     if (this.isTransitioningMap) return
     if (!this.nearbyExit) return
+    if (this.nearbyNpc || this.nearbyCapturable) return
 
     if (
       Phaser.Input.Keyboard.JustDown(this.interactKey.e) ||
@@ -961,7 +935,6 @@ export default class MainScene extends Phaser.Scene {
       const npc = createNpc(this, npcData)
       this.updateNpcQuestIndicator(npc)
       this.npcs.push(npc)
-      this.mapObjects.push(npc)
     })
   }
 
@@ -1134,86 +1107,214 @@ export default class MainScene extends Phaser.Scene {
     })
   }
 
-  spawnEnemy(x, y, enemyData = null) {
-    const enemy = createEnemy(this, x, y)
+  spawnEnemy(x, y, enemyData = {}) {
+    const enemy = createEnemy(this, x, y, enemyData)
 
-    enemy.hp = enemyData?.hp ?? this.enemyMaxHP
-    enemy.maxHp = enemyData?.hp ?? this.enemyMaxHP
-    enemy.speed = enemyData?.speed ?? Phaser.Math.FloatBetween(0.4, 0.9)
-    enemy.directionX = Phaser.Math.Between(-1, 1)
-    enemy.directionY = Phaser.Math.Between(-1, 1)
-    enemy.enemyType = enemyData?.id ?? 'wild_enemy'
-    enemy.enemyName = enemyData?.name ?? 'Inimigo Selvagem'
-    enemy.enemyColor = enemyData?.color ?? 0xff6b6b
-    enemy.contactDamage = enemyData?.contactDamage ?? 10
-    enemy.xpReward = enemyData?.xpReward ?? 20
+    enemy.id = enemyData.id ?? 'wild_enemy'
+    enemy.key = enemyData.key || enemyData.id
+    enemy.name = enemyData.name ?? 'Inimigo Selvagem'
+    enemy.enemyType = enemyData.id ?? 'wild_enemy'
+    enemy.enemyName = enemyData.name ?? 'Inimigo Selvagem'
+    enemy.maxHp = enemyData.hp ?? this.enemyMaxHP
+    enemy.hp = enemyData.hp ?? this.enemyMaxHP
+    enemy.speed = enemyData.speed ?? Phaser.Math.FloatBetween(0.4, 0.9)
+    enemy.color = enemyData.color ?? 0xff6b6b
+    enemy.xpReward = enemyData.xpReward ?? 0
+    enemy.contactDamage = enemyData.contactDamage ?? 5
+    enemy.behavior = enemyData.behavior ?? 'wander'
+    enemy.aggroRadius = enemyData.aggroRadius ?? 120
+    enemy.preferredRange = enemyData.preferredRange ?? 20
+    enemy.wanderRadius = enemyData.wanderRadius ?? 60
+    enemy.leashRadius = enemyData.leashRadius ?? 180
+    enemy.attackCooldown = enemyData.attackCooldown ?? 900
 
-    if (enemy.setFillStyle) {
-      enemy.setFillStyle(enemy.enemyColor)
-    } else if (enemy.list?.[1]?.setFillStyle) {
-      enemy.list[1].setFillStyle(enemy.enemyColor)
-    }
+    enemy.spawnX = x
+    enemy.spawnY = y
+    enemy.enemyData = enemyData
+    enemy.state = 'idle'
+    enemy.directionX = Phaser.Math.Between(0, 1) ? 1 : -1
+    enemy.directionY = Phaser.Math.Between(0, 1) ? 1 : -1
+    enemy.nextDecisionTime = 0
+    enemy.lastAttackTime = 0
+    enemy.chargeUntil = 0
+    enemy.chargeCooldownUntil = 0
+    enemy.chargeDirX = 0
+    enemy.chargeDirY = 0
+    enemy.floatOffset = Phaser.Math.FloatBetween(0, Math.PI * 2)
+    enemy.homeBias = Phaser.Math.FloatBetween(0.8, 1.25)
 
-    enemy.healthBar = this.add.rectangle(enemy.x, enemy.y - 45, 46, 8, 0x000000)
-    enemy.healthFill = this.add.rectangle(enemy.x - 21, enemy.y - 45, 42, 4, 0xff3b3b)
+    enemy.healthBar = this.add.rectangle(x, y - 34, 34, 5, 0x1f2937)
+    enemy.healthBar.setDepth(9)
+    enemy.healthBar.setVisible(false)
+
+    enemy.healthFill = this.add.rectangle(x - 17, y - 34, 34, 5, 0x22c55e)
     enemy.healthFill.setOrigin(0, 0.5)
+    enemy.healthFill.setDepth(10)
+    enemy.healthFill.setVisible(false)
 
     enemy.setSize(40, 40)
     enemy.setInteractive()
-    enemy.on('pointerdown', () => { this.attackEnemy(enemy) })
+    enemy.on('pointerdown', () => { this.selectEnemy(enemy) })
 
+    enemy.setDepth(6)
     this.enemies.push(enemy)
   }
 
+  updateEnemyHealthBar(enemy) {
+    if (!enemy.healthBar || !enemy.healthFill) return
+
+    enemy.healthBar.setPosition(enemy.x, enemy.y - 34)
+    enemy.healthFill.setPosition(enemy.x - 17, enemy.y - 34)
+
+    const ratio = Phaser.Math.Clamp(enemy.hp / enemy.maxHp, 0, 1)
+    enemy.healthFill.width = 34 * ratio
+  }
+
   updateEnemies() {
-    this.enemies.forEach((enemy) => {
-      if (!enemy.active) return
+    updateEnemyAI(this, this.enemies)
+    updateEnemyVisibility(this, this.enemies)
+  }
 
-      enemy.x += enemy.directionX * enemy.speed
-      enemy.y += enemy.directionY * enemy.speed
+  selectEnemy(enemy) {
+    if (!enemy || enemy.hp <= 0 || !enemy.active) return
+    this.targetEnemy = enemy
+  }
 
-      enemy.x = Phaser.Math.Clamp(enemy.x, 30, this.currentMap.config.worldWidth - 30)
-      enemy.y = Phaser.Math.Clamp(enemy.y, 30, this.currentMap.config.worldHeight - 30)
+  updateAutoAttack(time) {
+    const target = this.targetEnemy
 
-      if (Math.random() < 0.015) {
-        enemy.directionX = Phaser.Math.Between(-1, 1)
-        enemy.directionY = Phaser.Math.Between(-1, 1)
-      }
+    if (!target || !target.active || target.hp <= 0) {
+      this.targetEnemy = null
+      this.targetRing.setVisible(false)
+      return
+    }
 
-      enemy.healthBar.x = enemy.x
-      enemy.healthBar.y = enemy.y - 45
-      enemy.healthFill.x = enemy.x - 21
-      enemy.healthFill.y = enemy.y - 45
-    })
+    this.targetRing.setPosition(target.x, target.y)
+    this.targetRing.setVisible(true)
+
+    const dist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y, target.x, target.y
+    )
+
+    if (dist > 160) return
+
+    const interval = this.activeCreature
+      ? Math.max(450, 1200 - this.activeCreature.speed * 400)
+      : 900
+
+    if (time < this.lastAutoAttackTime + interval) return
+
+    this.lastAutoAttackTime = time
+    this.attackEnemy(target)
   }
 
   attackEnemy(enemy) {
     if (!enemy || enemy.hp <= 0) return
 
-    enemy.hp -= 20
+    const damage = this.activeCreature?.damage ?? 20
 
-    const percent = Phaser.Math.Clamp(enemy.hp / enemy.maxHp, 0, 1)
-    enemy.healthFill.width = 42 * percent
-
-    this.tweens.add({
-      targets: enemy,
-      alpha: 0.2,
-      duration: 80,
-      yoyo: true
+    const result = applyPlayerAttack(this, enemy, {
+      damage,
+      attacker: this.player,
+      companion: this.companion
     })
 
-    this.tweens.add({
-      targets: this.companion,
-      x: enemy.x - 20,
-      y: enemy.y,
-      duration: 120,
-      yoyo: true
-    })
+    if (result.damage > 0) {
+      this.spawnDamageNumber(enemy.x, enemy.y - 20, result.damage)
+    }
 
-    if (enemy.hp <= 0) this.killEnemy(enemy)
+    if (result.killed) this.killEnemy(enemy)
+  }
+
+  spawnDamageNumber(x, y, amount) {
+    const offsetX = Phaser.Math.Between(-10, 10)
+
+    const text = this.add.text(x + offsetX, y, `-${amount}`, {
+      fontSize: '14px',
+      fontFamily: 'monospace',
+      color: '#ff4d4d',
+      stroke: '#000000',
+      strokeThickness: 3
+    })
+      .setOrigin(0.5)
+      .setDepth(11)
+
+    this.tweens.add({
+      targets: text,
+      y: y - 38,
+      alpha: 0,
+      duration: 580,
+      ease: 'Cubic.Out',
+      onComplete: () => text.destroy()
+    })
+  }
+
+  checkCaptureInteraction() {
+    if (!this.nearbyCapturable) return
+    if (this.nearbyNpc) return
+
+    if (
+      Phaser.Input.Keyboard.JustDown(this.interactKey.e) ||
+      Phaser.Input.Keyboard.JustDown(this.interactKey.a)
+    ) {
+      this.tryCapture(this.nearbyCapturable)
+    }
+  }
+
+  tryCapture(enemy) {
+    const result = attemptCapture(enemy)
+
+    if (result.success) {
+      this.capturedCreatures.push(result.creature)
+
+      if (!this.activeCreature) {
+        this.activeCreature = result.creature
+        this.updateCompanionAppearance(result.creature)
+      }
+
+      this.showCaptureResult(enemy.x, enemy.y - 30, true, result.creature.name)
+      this.killEnemy(enemy)
+    } else {
+      this.showCaptureResult(enemy.x, enemy.y - 30, false, enemy.name)
+    }
+  }
+
+  showCaptureResult(x, y, success, name) {
+    const label = success ? `${name} capturado!` : `${name} escapou!`
+    const color = success ? '#facc15' : '#ff6b6b'
+
+    const text = this.add.text(x, y, label, {
+      fontSize: '13px',
+      fontFamily: 'monospace',
+      color,
+      stroke: '#000000',
+      strokeThickness: 3
+    })
+      .setOrigin(0.5)
+      .setDepth(12)
+
+    this.tweens.add({
+      targets: text,
+      y: y - 44,
+      alpha: 0,
+      duration: 900,
+      ease: 'Cubic.Out',
+      onComplete: () => text.destroy()
+    })
+  }
+
+  updateCompanionAppearance(creature) {
+    if (this.companion.setAppearance) {
+      this.companion.setAppearance(creature.color)
+    }
   }
 
   killEnemy(enemy) {
+    if (this.targetEnemy === enemy) {
+      this.targetEnemy = null
+      this.targetRing.setVisible(false)
+    }
+
     this.handleQuestProgress(enemy.enemyType)
 
     const drop = createDrop(this, enemy.x, enemy.y, 'coin')
@@ -1227,6 +1328,13 @@ export default class MainScene extends Phaser.Scene {
     }
 
     updateHudStats(this.hud, this.level, this.xp, this.coins)
+
+    this.pendingRespawns.push({
+      x: enemy.spawnX,
+      y: enemy.spawnY,
+      enemyData: enemy.enemyData,
+      respawnAt: this.time.now + 30000
+    })
 
     this.tweens.add({
       targets: enemy,
@@ -1242,25 +1350,64 @@ export default class MainScene extends Phaser.Scene {
     })
   }
 
+  checkRespawns() {
+    const now = this.time.now
+
+    this.pendingRespawns = this.pendingRespawns.filter((entry) => {
+      if (now < entry.respawnAt) return true
+
+      const distToPlayer = Phaser.Math.Distance.Between(
+        entry.x, entry.y, this.player.x, this.player.y
+      )
+
+      if (distToPlayer < 220) return true
+
+      this.spawnEnemy(entry.x, entry.y, entry.enemyData)
+      return false
+    })
+  }
+
   checkEnemyDamage(time) {
-    if (time < this.lastDamageTime + this.damageCooldown) return
+    this.enemies.forEach((enemy) => {
+      if (!enemy.active) return
+      if (enemy.hp <= 0) return
 
-    const touchingEnemy = this.enemies.find(enemy =>
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y) < 55
-    )
+      const distance = Phaser.Math.Distance.Between(
+        this.player.x,
+        this.player.y,
+        enemy.x,
+        enemy.y
+      )
 
-    if (!touchingEnemy) return
+      const contactRange =
+        enemy.behavior === 'kite'
+          ? enemy.preferredRange * 0.55
+          : enemy.behavior === 'charge'
+            ? 34
+            : 28
 
-    this.playerHp -= touchingEnemy.contactDamage ?? 10
-    this.lastDamageTime = time
+      if (distance <= contactRange && time >= enemy.lastAttackTime + enemy.attackCooldown) {
+        enemy.lastAttackTime = time
+        enemy.lastCombatTime = time
 
-    updateHudHp(this.hud, this.playerHp, this.playerMaxHp, this.companionHp, this.companionMaxHp)
+        this.playerHp = Math.max(0, this.playerHp - enemy.contactDamage)
 
-    this.tweens.add({
-      targets: this.player,
-      alpha: 0.3,
-      duration: 80,
-      yoyo: true
+        updateHudHp(
+          this.hud,
+          this.playerHp,
+          this.playerMaxHp,
+          this.companionHp,
+          this.companionMaxHp
+        )
+
+        this.tweens.add({
+          targets: this.player,
+          alpha: 0.35,
+          duration: 80,
+          yoyo: true,
+          repeat: 2
+        })
+      }
     })
 
     if (this.playerHp <= 0) {

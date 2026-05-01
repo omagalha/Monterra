@@ -5,26 +5,26 @@ export function createDialogBox(scene) {
   dialog.currentNpc = null
   dialog.currentLineIndex = 0
 
-  dialog.panel = scene.add.rectangle(195, 760, 360, 130, 0x111111, 0.88)
+  dialog.panel = scene.add.rectangle(422, 335, 800, 100, 0x111111, 0.88)
     .setStrokeStyle(3, 0xffffff)
     .setScrollFactor(0)
     .setDepth(15)
     .setVisible(false)
 
-  dialog.nameText = scene.add.text(28, 702, '', {
+  dialog.nameText = scene.add.text(28, 292, '', {
     fontSize: '14px',
     color: '#facc15',
     fontFamily: 'monospace'
   }).setScrollFactor(0).setDepth(15).setVisible(false)
 
-  dialog.contentText = scene.add.text(28, 728, '', {
+  dialog.contentText = scene.add.text(28, 314, '', {
     fontSize: '14px',
     color: '#ffffff',
     fontFamily: 'monospace',
-    wordWrap: { width: 320 }
+    wordWrap: { width: 760 }
   }).setScrollFactor(0).setDepth(15).setVisible(false)
 
-  dialog.hintText = scene.add.text(250, 810, 'E / A para continuar', {
+  dialog.hintText = scene.add.text(660, 368, 'E / A para continuar', {
     fontSize: '11px',
     color: '#cccccc',
     fontFamily: 'monospace'

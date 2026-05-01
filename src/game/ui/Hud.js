@@ -96,12 +96,12 @@ export function createHud(scene) {
   }).setScrollFactor(0)
 
   // botão inventário
-  hud.inventoryButton = scene.add.rectangle(345, 36, 42, 42, 0x111111, 0.7)
+  hud.inventoryButton = scene.add.rectangle(800, 36, 42, 42, 0x111111, 0.7)
     .setStrokeStyle(2, 0xffffff)
     .setScrollFactor(0)
     .setInteractive()
 
-  hud.inventoryText = scene.add.text(333, 24, '🎒', {
+  hud.inventoryText = scene.add.text(788, 24, '🎒', {
     fontSize: '24px'
   }).setScrollFactor(0)
 
