@@ -12,6 +12,7 @@ import { quests } from '../data/quests'
 import { createQuestTracker } from '../ui/QuestTracker'
 import { createMiniMap } from '../ui/MiniMap'
 import { createInteractionPrompt } from '../ui/InteractionPrompt'
+import { forestZones } from '../maps/forest/zones'
 import itemsSpriteUrl from '../../assets/icons/items.png'
 
 export default class MainScene extends Phaser.Scene {
@@ -65,6 +66,10 @@ export default class MainScene extends Phaser.Scene {
   nearbyNpc = null
   nearbyExit = null
 
+  currentZone = null
+  currentZoneText = null
+  lastZoneId = null
+
   transitionOverlay
 
   collisionZones = []
@@ -100,6 +105,18 @@ export default class MainScene extends Phaser.Scene {
     this.questTracker = createQuestTracker(this)
     this.initializeQuestStates()
     this.interactionPrompt = createInteractionPrompt(this)
+
+    this.currentZoneText = this.add.text(30, 64, '', {
+      fontSize: '14px',
+      color: '#d1fae5',
+      fontFamily: 'monospace',
+      backgroundColor: '#00000066',
+      padding: { x: 8, y: 4 }
+    })
+
+    this.currentZoneText.setScrollFactor(0)
+    this.currentZoneText.setDepth(50)
+    this.currentZoneText.setVisible(false)
 
     this.transitionOverlay = this.add.rectangle(195, 422, 390, 844, 0x000000)
       .setScrollFactor(0)
@@ -163,6 +180,8 @@ export default class MainScene extends Phaser.Scene {
     if (!this.isCollidingAt(this.player.x, nextY)) {
       this.player.y = nextY
     }
+
+    this.updateCurrentZone()
 
     if (this.miniMap) {
       this.miniMap.updatePlayer(this.player.x, this.player.y)
@@ -248,6 +267,13 @@ export default class MainScene extends Phaser.Scene {
       this.miniMap.destroy()
       this.miniMap = null
     }
+
+    this.currentZone = null
+    this.lastZoneId = null
+
+    if (this.currentZoneText) {
+      this.currentZoneText.setVisible(false)
+    }
   }
 
   drawMapBase(config) {
@@ -260,23 +286,25 @@ export default class MainScene extends Phaser.Scene {
     ).setDepth(-1)
     this.mapObjects.push(bg)
 
-    const roadHorizontal = this.add.rectangle(
-      config.worldWidth / 2,
-      config.worldHeight / 2,
-      config.worldWidth,
-      110,
-      0xc89b5a
-    )
+    if (config.id === 'town') {
+      const roadHorizontal = this.add.rectangle(
+        config.worldWidth / 2,
+        config.worldHeight / 2,
+        config.worldWidth,
+        110,
+        0xc89b5a
+      )
 
-    const roadVertical = this.add.rectangle(
-      config.worldWidth / 2,
-      config.worldHeight / 2,
-      110,
-      config.worldHeight,
-      0xc89b5a
-    )
+      const roadVertical = this.add.rectangle(
+        config.worldWidth / 2,
+        config.worldHeight / 2,
+        110,
+        config.worldHeight,
+        0xc89b5a
+      )
 
-    this.mapObjects.push(roadHorizontal, roadVertical)
+      this.mapObjects.push(roadHorizontal, roadVertical)
+    }
 
     const title = this.add.text(30, 30, config.name, {
       fontSize: '24px',
@@ -372,6 +400,51 @@ export default class MainScene extends Phaser.Scene {
     this.createCollisionZone(x, y, 28, 20)
   }
 
+  createPathRect(x, y, width, height, color = 0xb98a4a) {
+    const path = this.add.rectangle(x, y, width, height, color)
+    path.setStrokeStyle(3, 0x7a5428)
+    this.mapObjects.push(path)
+    return path
+  }
+
+  createPathEllipse(x, y, width, height, color = 0xb98a4a) {
+    const path = this.add.ellipse(x, y, width, height, color)
+    path.setStrokeStyle(3, 0x7a5428)
+    this.mapObjects.push(path)
+    return path
+  }
+
+  createGroundPatch(x, y, width, height, color = 0x3f8f55, alpha = 1) {
+    const patch = this.add.ellipse(x, y, width, height, color, alpha)
+    patch.setStrokeStyle(2, 0x2d5a36, 0.35)
+    this.mapObjects.push(patch)
+    return patch
+  }
+
+  createTreeCluster(positions) {
+    positions.forEach(([x, y]) => this.createTree(x, y))
+  }
+
+  createRockCluster(positions) {
+    positions.forEach(([x, y]) => this.createRock(x, y))
+  }
+
+  createFlowerPatch(positions) {
+    positions.forEach(([x, y]) => this.createFlower(x, y))
+  }
+
+  createForestPond(x, y, width, height, collisionWidth, collisionHeight) {
+    const pond = this.add.ellipse(x, y, width, height, 0x4dabf7)
+    pond.setStrokeStyle(4, 0x1d4ed8)
+
+    const pondInner = this.add.ellipse(x, y, width * 0.72, height * 0.62, 0x7dd3fc)
+
+    this.mapObjects.push(pond, pondInner)
+    this.createCollisionZone(x, y, collisionWidth, collisionHeight)
+
+    return pond
+  }
+
   drawTownDecoration() {
     this.createHouse(250, 260)
     this.createHouse(920, 260)
@@ -405,54 +478,370 @@ export default class MainScene extends Phaser.Scene {
   }
 
   drawForestDecoration() {
-    const southRoad = this.add.rectangle(1100, 1600, 320, 140, 0xb98a4a)
-    southRoad.setStrokeStyle(3, 0x7a5428)
+    this.drawForestTerrain()
+    this.drawForestPaths()
+    this.drawForestWater()
 
-    const centerPath = this.add.rectangle(1100, 1250, 180, 520, 0xb98a4a)
-    centerPath.setStrokeStyle(3, 0x7a5428)
+    this.drawForestSouthEntry()
+    this.drawForestLowerTrail()
+    this.drawForestCentralClearing()
+    this.drawForestWestCaveRoute()
+    this.drawForestEastMountainRoute()
+    this.drawForestDenseWilds()
+    this.drawForestDeepNorth()
+    this.drawForestNorthernCrown()
 
-    const eastPath = this.add.rectangle(1640, 760, 520, 120, 0xb98a4a)
-    eastPath.setStrokeStyle(3, 0x7a5428)
+    // Use durante desenvolvimento para validar colisões
+    // this.drawCollisionDebug()
 
-    const westPath = this.add.rectangle(480, 760, 420, 120, 0xb98a4a)
-    westPath.setStrokeStyle(3, 0x7a5428)
+    // Use quando adicionar o debug das zonas
+    // this.drawForestZoneDebug()
+  }
 
-    this.mapObjects.push(southRoad, centerPath, eastPath, westPath)
+  drawForestTerrain() {
+    // Grandes manchas de variação no solo.
+    // Isso evita que o mapa grande pareça uma cor chapada.
+    this.createGroundPatch(1200, 2580, 900, 520, 0x3f8f55, 0.55)
+    this.createGroundPatch(1200, 2100, 1050, 620, 0x4f9a5f, 0.75)
+    this.createGroundPatch(560, 1680, 760, 520, 0x3a7f4d, 0.7)
+    this.createGroundPatch(1800, 1260, 760, 560, 0x376f45, 0.75)
+    this.createGroundPatch(1200, 1460, 1180, 640, 0x356b43, 0.75)
+    this.createGroundPatch(1200, 820, 1220, 520, 0x2f623d, 0.82)
+    this.createGroundPatch(1200, 300, 1020, 320, 0x294f34, 0.88)
+  }
 
-    const clearing = this.add.ellipse(1100, 960, 620, 360, 0x4f9a5f)
-    clearing.setStrokeStyle(4, 0x2d5a36)
-    this.mapObjects.push(clearing)
+  drawForestPaths() {
+    // Entrada da cidade para dentro da floresta
+    this.createPathRect(1200, 3020, 360, 230)
+    this.createPathRect(1200, 2670, 240, 560)
 
-    const pond = this.add.ellipse(1500, 1220, 260, 160, 0x4dabf7)
-    pond.setStrokeStyle(4, 0x1d4ed8)
-    const pondInner = this.add.ellipse(1500, 1220, 190, 110, 0x7dd3fc)
-    this.mapObjects.push(pond, pondInner)
+    // Trilha baixa
+    this.createPathEllipse(1200, 2420, 460, 220)
+    this.createPathRect(1200, 2220, 210, 360)
 
-    this.createCollisionZone(1500, 1220, 210, 120)
+    // Clareira central
+    this.createPathEllipse(1200, 2050, 760, 360)
 
-    const treePositions = [
-      [180, 180], [300, 220], [460, 180], [620, 220], [1780, 180], [1940, 220], [2060, 180],
-      [180, 420], [340, 520], [520, 400], [1820, 420], [1980, 500], [2100, 380],
-      [220, 760], [340, 940], [420, 1120], [1880, 760], [1980, 920], [2100, 1080],
-      [220, 1380], [380, 1520], [560, 1640], [1760, 1400], [1940, 1540], [2100, 1660],
-      [860, 520], [980, 480], [1180, 500], [1320, 540],
-      [760, 760], [880, 700], [980, 720], [1220, 680], [1360, 740],
-      [760, 1160], [900, 1260], [1260, 1180], [1380, 1100]
-    ]
+    // Bifurcação oeste para caverna
+    this.createPathRect(760, 1780, 720, 130)
+    this.createPathEllipse(520, 1680, 420, 240)
 
-    treePositions.forEach(([x, y]) => this.createTree(x, y))
+    // Subida central para mata densa
+    this.createPathRect(1200, 1650, 190, 440)
+    this.createPathEllipse(1200, 1440, 520, 240)
 
-    this.createRock(920, 850)
-    this.createRock(1010, 820)
-    this.createRock(1170, 880)
-    this.createRock(1720, 580)
-    this.createRock(620, 760)
+    // Rota leste para montanha
+    this.createPathRect(1660, 1320, 680, 120)
+    this.createPathEllipse(1900, 1180, 460, 260)
 
-    this.createFlower(1040, 1010)
-    this.createFlower(1130, 920)
-    this.createFlower(1210, 1000)
-    this.createFlower(1460, 1090)
-    this.createFlower(1580, 1100)
+    // Passagem para floresta profunda
+    this.createPathRect(1200, 1050, 170, 500)
+    this.createPathEllipse(1200, 820, 520, 240)
+
+    // Topo selvagem
+    this.createPathRect(1200, 520, 150, 350)
+    this.createPathEllipse(1200, 300, 520, 220)
+  }
+
+  drawForestWater() {
+    // Lago principal perto da clareira
+    this.createForestPond(1540, 2180, 300, 180, 230, 125)
+
+    // Lago menor na mata densa
+    this.createForestPond(760, 1320, 220, 140, 170, 95)
+
+    // Água pequena no norte para dar sensação de área mais rara
+    this.createForestPond(1540, 720, 220, 130, 165, 90)
+  }
+
+  drawForestSouthEntry() {
+    this.createTreeCluster([
+      [260, 3000], [420, 2920], [620, 3060],
+      [1780, 3060], [1980, 2920], [2160, 3000],
+
+      [360, 2780], [560, 2700],
+      [1840, 2700], [2040, 2780]
+    ])
+
+    this.createRockCluster([
+      [980, 2940],
+      [1420, 2940],
+      [900, 2780],
+      [1500, 2760]
+    ])
+
+    this.createFlowerPatch([
+      [1080, 2920],
+      [1160, 2860],
+      [1280, 2900],
+      [1340, 2820]
+    ])
+  }
+
+  drawForestLowerTrail() {
+    this.createTreeCluster([
+      [760, 2580], [860, 2480], [760, 2360],
+      [1640, 2580], [1540, 2480], [1640, 2360],
+
+      [620, 2280], [720, 2160],
+      [1680, 2160], [1780, 2280]
+    ])
+
+    this.createRockCluster([
+      [1020, 2480],
+      [1380, 2460],
+      [980, 2260],
+      [1420, 2240]
+    ])
+
+    this.createFlowerPatch([
+      [1120, 2520],
+      [1260, 2500],
+      [1160, 2320],
+      [1320, 2320]
+    ])
+  }
+
+  drawForestCentralClearing() {
+    // A clareira precisa respirar: menos árvores no centro e mais borda natural.
+    this.createTreeCluster([
+      [620, 2160], [700, 2020], [760, 1900],
+      [1760, 2160], [1680, 2020], [1620, 1900],
+
+      [860, 1780], [1020, 1720],
+      [1380, 1720], [1540, 1780],
+
+      [700, 2300], [880, 2360],
+      [1520, 2360], [1700, 2300]
+    ])
+
+    this.createRockCluster([
+      [920, 2100],
+      [1040, 1980],
+      [1360, 2020],
+      [1420, 2180],
+      [1500, 2260]
+    ])
+
+    this.createFlowerPatch([
+      [1040, 2120],
+      [1140, 2060],
+      [1260, 2080],
+      [1320, 2160],
+      [1160, 2220],
+      [1460, 2100]
+    ])
+  }
+
+  drawForestWestCaveRoute() {
+    this.createTreeCluster([
+      [220, 1380], [360, 1340], [520, 1380],
+      [220, 1980], [380, 2020], [560, 1960],
+
+      [760, 1500], [840, 1620], [760, 1860],
+      [420, 1500], [360, 1820]
+    ])
+
+    this.createRockCluster([
+      [360, 1660],
+      [500, 1560],
+      [640, 1740],
+      [780, 1800]
+    ])
+
+    this.createFlowerPatch([
+      [520, 1760],
+      [620, 1660],
+      [700, 1580]
+    ])
+  }
+
+  drawForestEastMountainRoute() {
+    this.createTreeCluster([
+      [1540, 980], [1680, 900], [1840, 900],
+      [2040, 960], [2160, 1060],
+
+      [1520, 1540], [1680, 1600],
+      [1900, 1540], [2080, 1460]
+    ])
+
+    this.createRockCluster([
+      [1640, 1240],
+      [1780, 1160],
+      [1960, 1260],
+      [2080, 1160],
+      [1840, 1420]
+    ])
+
+    this.createFlowerPatch([
+      [1740, 1320],
+      [1880, 1340],
+      [1980, 1220]
+    ])
+  }
+
+  drawForestDenseWilds() {
+    this.createTreeCluster([
+      [540, 1120], [660, 1040], [820, 1100],
+      [980, 1060], [1140, 1120], [1300, 1060],
+      [1460, 1100], [1620, 1040], [1800, 1120],
+
+      [520, 1540], [680, 1600], [860, 1540],
+      [1540, 1540], [1720, 1600], [1880, 1540],
+
+      [900, 1260], [1040, 1220], [1360, 1220], [1500, 1280]
+    ])
+
+    this.createRockCluster([
+      [960, 1460],
+      [1120, 1360],
+      [1320, 1460],
+      [1480, 1360],
+      [700, 1240]
+    ])
+
+    this.createFlowerPatch([
+      [1040, 1520],
+      [1220, 1480],
+      [1400, 1520]
+    ])
+  }
+
+  drawForestDeepNorth() {
+    this.createTreeCluster([
+      [420, 620], [560, 540], [720, 600],
+      [880, 520], [1040, 560], [1200, 500],
+      [1360, 560], [1520, 520], [1680, 600],
+      [1840, 540], [1980, 620],
+
+      [520, 880], [700, 960], [900, 900],
+      [1500, 900], [1700, 960], [1880, 880],
+
+      [760, 740], [940, 700], [1460, 700], [1640, 760]
+    ])
+
+    this.createRockCluster([
+      [860, 820],
+      [1040, 760],
+      [1340, 800],
+      [1500, 860],
+      [1180, 940]
+    ])
+
+    this.createFlowerPatch([
+      [980, 880],
+      [1240, 860],
+      [1400, 940]
+    ])
+  }
+
+  drawForestNorthernCrown() {
+    this.createTreeCluster([
+      [360, 180], [520, 260], [700, 180],
+      [880, 260], [1040, 180], [1200, 260],
+      [1360, 180], [1520, 260], [1700, 180],
+      [1880, 260], [2040, 180],
+
+      [620, 420], [820, 460], [1020, 430],
+      [1380, 430], [1580, 460], [1780, 420]
+    ])
+
+    this.createRockCluster([
+      [980, 300],
+      [1160, 240],
+      [1320, 320],
+      [1480, 260]
+    ])
+
+    this.createFlowerPatch([
+      [1080, 380],
+      [1240, 360],
+      [1400, 390]
+    ])
+  }
+
+  drawForestZoneDebug() {
+    Object.values(forestZones).forEach((zoneData) => {
+      const { x, y, width, height } = zoneData.bounds
+
+      const rect = this.add.rectangle(
+        x + width / 2,
+        y + height / 2,
+        width,
+        height,
+        0xffffff,
+        0.04
+      )
+
+      rect.setStrokeStyle(2, 0xffffff, 0.18)
+      this.mapObjects.push(rect)
+
+      const label = this.add.text(
+        x + 12,
+        y + 12,
+        `${zoneData.name} [${zoneData.dangerLevel}]`,
+        {
+          fontSize: '12px',
+          color: '#ffffff',
+          fontFamily: 'monospace',
+          backgroundColor: '#00000066'
+        }
+      )
+
+      this.mapObjects.push(label)
+    })
+  }
+
+  isPointInsideZone(x, y, zoneBounds) {
+    return (
+      x >= zoneBounds.x &&
+      x <= zoneBounds.x + zoneBounds.width &&
+      y >= zoneBounds.y &&
+      y <= zoneBounds.y + zoneBounds.height
+    )
+  }
+
+  getCurrentForestZone(playerX, playerY) {
+    const zones = Object.values(forestZones)
+
+    return zones.find((zone) =>
+      this.isPointInsideZone(playerX, playerY, zone.bounds)
+    ) ?? null
+  }
+
+  updateCurrentZone() {
+    if (this.currentMapId !== 'forest') {
+      this.currentZone = null
+      this.lastZoneId = null
+
+      if (this.currentZoneText) {
+        this.currentZoneText.setVisible(false)
+      }
+
+      return
+    }
+
+    const zone = this.getCurrentForestZone(this.player.x, this.player.y)
+    this.currentZone = zone
+
+    if (!zone) {
+      this.lastZoneId = null
+      this.currentZoneText.setVisible(false)
+      return
+    }
+
+    if (zone.id !== this.lastZoneId) {
+      this.lastZoneId = zone.id
+      this.currentZoneText.setText(`Área: ${zone.name} | Perigo ${zone.dangerLevel}`)
+      this.currentZoneText.setVisible(true)
+      this.currentZoneText.setAlpha(0)
+
+      this.tweens.add({
+        targets: this.currentZoneText,
+        alpha: 1,
+        duration: 180
+      })
+    }
   }
 
   drawCollisionDebug() {
@@ -754,6 +1143,16 @@ export default class MainScene extends Phaser.Scene {
     enemy.directionX = Phaser.Math.Between(-1, 1)
     enemy.directionY = Phaser.Math.Between(-1, 1)
     enemy.enemyType = enemyData?.id ?? 'wild_enemy'
+    enemy.enemyName = enemyData?.name ?? 'Inimigo Selvagem'
+    enemy.enemyColor = enemyData?.color ?? 0xff6b6b
+    enemy.contactDamage = enemyData?.contactDamage ?? 10
+    enemy.xpReward = enemyData?.xpReward ?? 20
+
+    if (enemy.setFillStyle) {
+      enemy.setFillStyle(enemy.enemyColor)
+    } else if (enemy.list?.[1]?.setFillStyle) {
+      enemy.list[1].setFillStyle(enemy.enemyColor)
+    }
 
     enemy.healthBar = this.add.rectangle(enemy.x, enemy.y - 45, 46, 8, 0x000000)
     enemy.healthFill = this.add.rectangle(enemy.x - 21, enemy.y - 45, 42, 4, 0xff3b3b)
@@ -820,10 +1219,11 @@ export default class MainScene extends Phaser.Scene {
     const drop = createDrop(this, enemy.x, enemy.y, 'coin')
     this.drops.push(drop)
 
-    this.xp += 20
-    if (this.xp >= 100) {
+    this.xp += enemy.xpReward ?? 20
+
+    while (this.xp >= 100) {
+      this.xp -= 100
       this.level += 1
-      this.xp = 0
     }
 
     updateHudStats(this.hud, this.level, this.xp, this.coins)
@@ -851,7 +1251,7 @@ export default class MainScene extends Phaser.Scene {
 
     if (!touchingEnemy) return
 
-    this.playerHp -= 10
+    this.playerHp -= touchingEnemy.contactDamage ?? 10
     this.lastDamageTime = time
 
     updateHudHp(this.hud, this.playerHp, this.playerMaxHp, this.companionHp, this.companionMaxHp)

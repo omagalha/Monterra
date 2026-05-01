@@ -3,38 +3,46 @@ export const forestConfig = {
   name: 'Floresta',
   type: 'combat',
   background: 0x2f7d4a,
-  worldWidth: 2200,
-  worldHeight: 1800,
+
+  // Macro-região vertical
+  worldWidth: 2400,
+  worldHeight: 3200,
+
   hasEnemies: true,
   hasVillagers: false,
-  spawn: { x: 1100, y: 1650 },
+
+  // Entrada pela parte mais baixa da floresta
+  spawn: { x: 1200, y: 3010 },
+
   exits: [
     {
       id: 'forest_to_town',
       to: 'town',
-      x: 1100,
-      y: 1720,
-      width: 240,
-      height: 70,
+      x: 1200,
+      y: 3120,
+      width: 260,
+      height: 90,
       label: 'Cidade Inicial'
     },
-    {
-      id: 'forest_to_mountain',
-      to: 'mountain',
-      x: 2050,
-      y: 520,
-      width: 80,
-      height: 240,
-      label: 'Montanha'
-    },
+
     {
       id: 'forest_to_cave',
       to: 'cave',
-      x: 140,
-      y: 720,
-      width: 80,
-      height: 240,
+      x: 180,
+      y: 1680,
+      width: 90,
+      height: 280,
       label: 'Caverna'
+    },
+
+    {
+      id: 'forest_to_mountain',
+      to: 'mountain',
+      x: 2220,
+      y: 1180,
+      width: 90,
+      height: 280,
+      label: 'Montanha'
     }
   ]
 }
