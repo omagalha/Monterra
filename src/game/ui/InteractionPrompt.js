@@ -1,18 +1,23 @@
+import { UI_COLORS, UI_FONT } from './theme'
+
 export function createInteractionPrompt(scene) {
   const prompt = {}
 
   prompt.isVisible = false
 
-  prompt.bg = scene.add.rectangle(422, 354, 250, 42, 0x111111, 0.88)
-    .setStrokeStyle(2, 0xffffff)
+  const cx = scene.scale.width / 2
+  const cy = scene.scale.height - 40
+
+  prompt.bg = scene.add.rectangle(cx, cy, 250, 42, UI_COLORS.panel, 0.9)
+    .setStrokeStyle(2, UI_COLORS.borderBright)
     .setScrollFactor(0)
     .setDepth(15)
     .setVisible(false)
 
-  prompt.text = scene.add.text(422, 354, '', {
+  prompt.text = scene.add.text(cx, cy, '', {
     fontSize: '14px',
-    color: '#ffffff',
-    fontFamily: 'monospace'
+    color: UI_COLORS.text,
+    fontFamily: UI_FONT.body
   })
     .setOrigin(0.5)
     .setScrollFactor(0)

@@ -2,6 +2,9 @@
   "permissions": {
     "additionalDirectories": [
       "c:\\Users\\Thales Magalhães\\.claude\\projects\\c--Users-Thales-Magalh-es-OneDrive-Desktop-Monterra-monterra\\memory"
+    ],
+    "allow": [
+      "Bash(curl -s http://localhost:5173)"
     ]
   }
 }

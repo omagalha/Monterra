@@ -1,6 +1,63 @@
 import { forestZones } from './zones'
 
 export const forestEnemyTypes = {
+  embravos: {
+    key: 'embravos',
+    id: 'embravos',
+    name: 'Embravos',
+    color: 0xf97316,
+    hp: 74,
+    speed: 0.95,
+    xpReward: 18,
+    contactDamage: 8,
+    difficulty: 2,
+    behavior: 'wander',
+    aggroRadius: 145,
+    preferredRange: 24,
+    wanderRadius: 90,
+    leashRadius: 190,
+    attackCooldown: 820,
+    habitat: 'southern_paths'
+  },
+
+  brumel: {
+    key: 'brumel',
+    id: 'brumel',
+    name: 'Brumel',
+    color: 0x94a3b8,
+    hp: 110,
+    speed: 0.86,
+    xpReward: 28,
+    contactDamage: 13,
+    difficulty: 3,
+    behavior: 'kite',
+    aggroRadius: 215,
+    preferredRange: 95,
+    wanderRadius: 100,
+    leashRadius: 260,
+    attackCooldown: 760,
+    habitat: 'dense_wilds'
+  },
+
+  luphorn: {
+    key: 'luphorn',
+    id: 'luphorn',
+    name: 'Luphorn',
+    color: 0x5f7f2f,
+    hp: 190,
+    speed: 0.72,
+    xpReward: 44,
+    contactDamage: 18,
+    difficulty: 5,
+    behavior: 'charge',
+    aggroRadius: 210,
+    preferredRange: 20,
+    wanderRadius: 85,
+    leashRadius: 280,
+    attackCooldown: 1250,
+    habitat: 'northern_crown'
+  },
+
   slime: {
     key: 'slime',
     id: 'wild_slime',
@@ -71,6 +128,12 @@ export const forestEnemyZones = {
           { x: 1120, y: 2790 },
           { x: 1280, y: 2830 }
         ]
+      },
+      {
+        type: 'embravos',
+        points: [
+          { x: 1420, y: 2920 }
+        ]
       }
     ]
   },
@@ -86,6 +149,13 @@ export const forestEnemyZones = {
           { x: 1110, y: 2440 },
           { x: 1280, y: 2370 },
           { x: 1440, y: 2480 }
+        ]
+      },
+      {
+        type: 'embravos',
+        points: [
+          { x: 1540, y: 2380 },
+          { x: 820, y: 2440 }
         ]
       }
     ]
@@ -155,6 +225,13 @@ export const forestEnemyZones = {
           { x: 1210, y: 1320 },
           { x: 1460, y: 1460 }
         ]
+      },
+      {
+        type: 'brumel',
+        points: [
+          { x: 1120, y: 1500 },
+          { x: 1380, y: 1380 }
+        ]
       }
     ]
   },
@@ -185,6 +262,12 @@ export const forestEnemyZones = {
           { x: 980, y: 300 },
           { x: 1240, y: 220 },
           { x: 1490, y: 320 }
+        ]
+      },
+      {
+        type: 'luphorn',
+        points: [
+          { x: 1180, y: 420 }
         ]
       }
     ]

@@ -11,5 +11,19 @@ export const desertEnemies = [
       { x: 760, y: 620 },
       { x: 940, y: 300 }
     ]
+  },
+  {
+    id: 'vayote',
+    name: 'Vayote',
+    hp: 92,
+    speed: 1.05,
+    xpReward: 24,
+    contactDamage: 10,
+    behavior: 'kite',
+    color: 0xd6b56d,
+    spawnPoints: [
+      { x: 360, y: 720 },
+      { x: 860, y: 520 }
+    ]
   }
 ]

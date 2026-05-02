@@ -12,11 +12,14 @@ import { quests } from '../data/quests'
 import { createQuestTracker } from '../ui/QuestTracker'
 import { createMiniMap } from '../ui/MiniMap'
 import { createInteractionPrompt } from '../ui/InteractionPrompt'
+import { createCapturePrompt } from '../ui/CapturePrompt'
 import { forestZones } from '../maps/forest/zones'
 import { applyPlayerAttack } from '../systems/CombatSystem'
 import { updateEnemyAI } from '../systems/EnemyAISystem'
 import { updateEnemyVisibility } from '../systems/EnemyVisibilitySystem'
-import { canCapture, attemptCapture } from '../systems/CaptureSystem'
+import { canCapture, attemptCapture, getCaptureRequirement, hasCaptureFood } from '../systems/CaptureSystem'
+import { getCompanionAttackInterval, getCompanionDamage, getCompanionFollowSpeed, setActiveCompanion } from '../systems/CompanionSystem'
+import { UI_COLORS, UI_FONT } from '../ui/theme'
 import itemsSpriteUrl from '../../assets/icons/items.png'
 
 export default class MainScene extends Phaser.Scene {
@@ -68,6 +71,7 @@ export default class MainScene extends Phaser.Scene {
   lastMiniMapRevealTime = 0
 
   interactionPrompt
+  capturePrompt
   nearbyNpc = null
   nearbyExit = null
   nearbyCapturable = null
@@ -120,12 +124,13 @@ export default class MainScene extends Phaser.Scene {
     this.questTracker = createQuestTracker(this)
     this.initializeQuestStates()
     this.interactionPrompt = createInteractionPrompt(this)
+    this.capturePrompt = createCapturePrompt(this)
 
-    this.currentZoneText = this.add.text(30, 64, '', {
+    this.currentZoneText = this.add.text(14, 140, '', {
       fontSize: '14px',
-      color: '#d1fae5',
-      fontFamily: 'monospace',
-      backgroundColor: '#00000066',
+      color: UI_COLORS.text,
+      fontFamily: UI_FONT.body,
+      backgroundColor: '#18121de6',
       padding: { x: 8, y: 4 }
     })
 
@@ -133,7 +138,11 @@ export default class MainScene extends Phaser.Scene {
     this.currentZoneText.setDepth(50)
     this.currentZoneText.setVisible(false)
 
-    this.transitionOverlay = this.add.rectangle(422, 195, 844, 390, 0x000000)
+    this.transitionOverlay = this.add.rectangle(
+      this.scale.width / 2, this.scale.height / 2,
+      this.scale.width, this.scale.height,
+      0x000000
+    )
       .setScrollFactor(0)
       .setDepth(999)
       .setAlpha(0)
@@ -156,7 +165,7 @@ export default class MainScene extends Phaser.Scene {
       this.inventory.setVisible(!this.inventory.visible)
     })
 
-    this.cameras.main.setZoom(0.65)
+    this.cameras.main.setZoom(1.0)
     this.cameras.main.startFollow(this.player, true, 0.04, 0.04)
 
     this.loadMap(this.currentMapId)
@@ -213,9 +222,7 @@ export default class MainScene extends Phaser.Scene {
       }
     }
 
-    const followSpeed = this.activeCreature
-      ? 0.03 + this.activeCreature.speed * 0.03
-      : 0.04
+    const followSpeed = getCompanionFollowSpeed(this.activeCreature)
     this.companion.x += (this.player.x - 35 - this.companion.x) * followSpeed
     this.companion.y += (this.player.y + 25 - this.companion.y) * followSpeed
 
@@ -340,12 +347,15 @@ export default class MainScene extends Phaser.Scene {
       this.addStaticMapObject(roadHorizontal, roadVertical)
     }
 
-    const title = this.add.text(30, 30, config.name, {
-      fontSize: '24px',
-      color: '#ffffff',
-      fontFamily: 'monospace'
+    const title = this.add.text(315, 18, config.name.toUpperCase(), {
+      fontSize: '15px',
+      color: UI_COLORS.gold,
+      fontFamily: UI_FONT.body,
+      backgroundColor: '#18121de6',
+      padding: { x: 12, y: 6 }
     })
     title.setScrollFactor(0)
+    title.setDepth(9)
     this.addStaticMapObject(title)
 
     if (config.id === 'town') {
@@ -508,31 +518,109 @@ export default class MainScene extends Phaser.Scene {
     const g = this.add.graphics()
     this.addStaticMapObject(g)
 
-    this.drawHouse(g, 250, 260)
-    this.drawHouse(g, 920, 260)
-    this.drawHouse(g, 260, 930)
-
-    this.drawPond(g, 920, 880, 180, 120, 150, 90)
-
-    this.drawTree(g, 120, 140)
-    this.drawTree(g, 150, 420)
-    this.drawTree(g, 1080, 150)
-    this.drawTree(g, 1030, 420)
-    this.drawTree(g, 160, 1080)
-    this.drawTree(g, 1020, 1040)
-    this.drawTree(g, 920, 1040)
-
-    this.drawFenceRow(g, 470, 340, 6)
-    this.drawFenceRow(g, 810, 340, 5)
-    this.drawFenceRow(g, 170, 860, 4)
-
-    this.drawFlower(g, 820, 760)
-    this.drawFlower(g, 860, 740)
-    this.drawFlower(g, 980, 760)
-    this.drawFlower(g, 1010, 920)
-    this.drawFlower(g, 870, 940)
+    this.drawTownPaths(g)
+    this.drawTownDistricts(g)
+    this.drawTownNature(g)
 
     // this.drawCollisionDebug()
+  }
+
+  drawTownPaths(g) {
+    this.drawPathRect(g, 900, 800, 1500, 130)
+    this.drawPathRect(g, 900, 800, 130, 1420)
+    this.drawPathEllipse(g, 900, 800, 430, 300, 0xc89b5a)
+    this.drawPathRect(g, 1310, 930, 600, 90, 0xb98a4a)
+    this.drawPathRect(g, 480, 940, 620, 90, 0xb98a4a)
+    this.drawPathRect(g, 900, 1220, 420, 90, 0xb98a4a)
+  }
+
+  drawTownDistricts(g) {
+    this.drawHouse(g, 430, 360)
+    this.drawHouse(g, 740, 330)
+    this.drawHouse(g, 1130, 350)
+    this.drawHouse(g, 1430, 430)
+    this.drawHouse(g, 390, 1120)
+    this.drawHouse(g, 710, 1180)
+    this.drawHouse(g, 1160, 1180)
+    this.drawHouse(g, 1450, 1110)
+
+    this.drawTownHall(g, 900, 560)
+    this.drawMarketStall(g, 420, 880, 0xf59e0b)
+    this.drawMarketStall(g, 560, 880, 0x22c55e)
+    this.drawMarketStall(g, 1320, 880, 0x38bdf8)
+    this.drawMarketStall(g, 1460, 880, 0xa855f7)
+
+    this.drawPond(g, 1340, 1030, 220, 135, 180, 95)
+    this.drawPond(g, 610, 620, 170, 100, 130, 72)
+
+    this.drawFenceRow(g, 315, 480, 7)
+    this.drawFenceRow(g, 1020, 470, 8)
+    this.drawFenceRow(g, 300, 1250, 9)
+    this.drawFenceRow(g, 1120, 1280, 10)
+  }
+
+  drawTownNature(g) {
+    this.drawTreeCluster(g, [
+      [160, 170], [300, 180], [1580, 170], [1680, 330],
+      [150, 520], [260, 680], [1600, 610], [1660, 980],
+      [180, 1390], [340, 1450], [1540, 1380], [1690, 1420],
+      [760, 1430], [1010, 1430], [1240, 1450]
+    ])
+
+    this.drawRockCluster(g, [
+      [250, 1000], [1530, 1010], [770, 1020], [1030, 1040],
+      [520, 1350], [1320, 1360]
+    ])
+
+    this.drawFlowerPatch(g, [
+      [760, 760], [805, 735], [850, 760], [950, 735], [1000, 760],
+      [1240, 980], [1280, 960], [1420, 980], [1490, 1030],
+      [520, 1010], [580, 1020], [650, 980], [720, 1040]
+    ])
+  }
+
+  drawTownHall(g, x, y) {
+    g.fillStyle(0x7c4a21)
+    g.fillRect(x - 120, y - 76, 240, 152)
+    g.lineStyle(4, 0x3b220f)
+    g.strokeRect(x - 120, y - 76, 240, 152)
+
+    g.fillStyle(0x4a2f1a)
+    g.fillTriangle(x - 140, y - 70, x, y - 145, x + 140, y - 70)
+    g.lineStyle(4, 0x201207)
+    g.strokeTriangle(x - 140, y - 70, x, y - 145, x + 140, y - 70)
+
+    g.fillStyle(0x30c0b0)
+    g.fillRect(x - 22, y - 132, 44, 44)
+    g.lineStyle(3, 0xc8a020)
+    g.strokeRect(x - 22, y - 132, 44, 44)
+
+    g.fillStyle(0x2b1a0d)
+    g.fillRect(x - 20, y + 8, 40, 68)
+    g.fillStyle(0x93c5fd)
+    g.fillRect(x - 82, y - 24, 34, 34)
+    g.fillRect(x + 48, y - 24, 34, 34)
+
+    this.createCollisionZone(x, y, 240, 145)
+  }
+
+  drawMarketStall(g, x, y, clothColor) {
+    g.fillStyle(0x6b3f1d)
+    g.fillRect(x - 54, y - 8, 108, 56)
+    g.lineStyle(2, 0x3b220f)
+    g.strokeRect(x - 54, y - 8, 108, 56)
+
+    g.fillStyle(clothColor)
+    g.fillRect(x - 62, y - 44, 124, 36)
+    g.lineStyle(2, 0x2d2115)
+    g.strokeRect(x - 62, y - 44, 124, 36)
+
+    g.fillStyle(0xf4e8c8)
+    g.fillCircle(x - 28, y + 16, 9)
+    g.fillCircle(x, y + 18, 9)
+    g.fillCircle(x + 28, y + 16, 9)
+
+    this.createCollisionZone(x, y + 4, 116, 74)
   }
 
   drawForestDecoration() {
@@ -877,14 +965,26 @@ export default class MainScene extends Phaser.Scene {
     }) ?? null
 
     if (this.nearbyNpc) {
+      this.capturePrompt.hide()
       this.interactionPrompt.show('E para conversar')
       return
     }
 
     if (this.nearbyCapturable) {
-      this.interactionPrompt.show(`E para capturar ${this.nearbyCapturable.name}`)
+      const requirement = getCaptureRequirement(this.nearbyCapturable)
+      if (requirement) {
+        this.capturePrompt.show({
+          enemy: this.nearbyCapturable,
+          animal: requirement.animal,
+          foodId: requirement.foodId,
+          hasFood: hasCaptureFood(this.inventory, requirement.foodId)
+        })
+      }
+      this.interactionPrompt.hide()
       return
     }
+
+    this.capturePrompt.hide()
 
     if (this.nearbyExit) {
       this.interactionPrompt.show(`E para entrar em ${this.nearbyExit.exitData.label}`)
@@ -1053,28 +1153,26 @@ export default class MainScene extends Phaser.Scene {
   }
 
   handleQuestProgress(enemyType) {
-    if (!this.activeQuest) return
-    if (!this.activeQuest.started || this.activeQuest.completed) return
+    Object.values(this.questStates).forEach((quest) => {
+      if (!quest.started || quest.completed) return
+      if (quest.type !== 'defeat' || quest.targetEnemy !== enemyType) return
 
-    if (
-      this.activeQuest.type === 'defeat' &&
-      this.activeQuest.targetEnemy === enemyType
-    ) {
-      this.activeQuest.progress += 1
+      quest.progress += 1
 
-      if (this.activeQuest.progress >= this.activeQuest.requiredAmount) {
-        this.activeQuest.progress = this.activeQuest.requiredAmount
-        this.activeQuest.completed = true
+      if (quest.progress >= quest.requiredAmount) {
+        quest.progress = quest.requiredAmount
+        quest.completed = true
 
         this.npcs.forEach((npc) => {
-          if (npc.npcData.questId === this.activeQuest.id) {
+          if (npc.npcData.questId === quest.id) {
             this.updateNpcQuestIndicator(npc)
           }
         })
       }
 
-      this.questTracker.update(this.activeQuest)
-    }
+      this.activeQuest = quest
+      this.questTracker.update(quest)
+    })
   }
 
   completeQuestReward(questId) {
@@ -1083,8 +1181,12 @@ export default class MainScene extends Phaser.Scene {
 
     quest.rewarded = true
 
-    this.xp += quest.reward.xp
-    this.coins += quest.reward.coins
+    this.xp += quest.reward.xp ?? 0
+    this.coins += quest.reward.coins ?? 0
+
+    Object.entries(quest.reward.items ?? {}).forEach(([itemId, amount]) => {
+      this.inventory.addItem(itemId, amount)
+    })
 
     while (this.xp >= 100) {
       this.xp -= 100
@@ -1198,9 +1300,7 @@ export default class MainScene extends Phaser.Scene {
 
     if (dist > 160) return
 
-    const interval = this.activeCreature
-      ? Math.max(450, 1200 - this.activeCreature.speed * 400)
-      : 900
+    const interval = getCompanionAttackInterval(this.activeCreature)
 
     if (time < this.lastAutoAttackTime + interval) return
 
@@ -1211,7 +1311,7 @@ export default class MainScene extends Phaser.Scene {
   attackEnemy(enemy) {
     if (!enemy || enemy.hp <= 0) return
 
-    const damage = this.activeCreature?.damage ?? 20
+    const damage = getCompanionDamage(this.activeCreature)
 
     const result = applyPlayerAttack(this, enemy, {
       damage,
@@ -1262,20 +1362,24 @@ export default class MainScene extends Phaser.Scene {
   }
 
   tryCapture(enemy) {
-    const result = attemptCapture(enemy)
+    const result = attemptCapture(enemy, this.inventory)
 
     if (result.success) {
       this.capturedCreatures.push(result.creature)
 
       if (!this.activeCreature) {
-        this.activeCreature = result.creature
-        this.updateCompanionAppearance(result.creature)
+        setActiveCompanion(this, result.creature)
+        updateHudHp(this.hud, this.playerHp, this.playerMaxHp, this.companionHp, this.companionMaxHp)
       }
 
       this.showCaptureResult(enemy.x, enemy.y - 30, true, result.creature.name)
+      this.capturePrompt.hide()
       this.killEnemy(enemy)
     } else {
-      this.showCaptureResult(enemy.x, enemy.y - 30, false, enemy.name)
+      const label = result.reason === 'missing_food'
+        ? `Falta comida para ${enemy.name}`
+        : enemy.name
+      this.showCaptureResult(enemy.x, enemy.y - 30, false, label)
     }
   }
 
@@ -1304,9 +1408,7 @@ export default class MainScene extends Phaser.Scene {
   }
 
   updateCompanionAppearance(creature) {
-    if (this.companion.setAppearance) {
-      this.companion.setAppearance(creature.color)
-    }
+    setActiveCompanion(this, creature)
   }
 
   killEnemy(enemy) {

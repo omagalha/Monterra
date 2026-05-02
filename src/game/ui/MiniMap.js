@@ -1,7 +1,9 @@
+import { UI_COLORS, addPanel } from './theme'
+
 export function createMiniMap(scene, worldWidth, worldHeight) {
   const miniMap = {}
 
-  const PANEL_X = 720
+  const PANEL_X = scene.scale.width - 124
   const PANEL_Y = 14
   const PANEL_W = 110
   const PANEL_H = 110
@@ -19,26 +21,29 @@ export function createMiniMap(scene, worldWidth, worldHeight) {
   miniMap.worldHeight = worldHeight
   miniMap.revealedCells = new Set()
 
-  miniMap.panelShadow = scene.add.rectangle(PANEL_X + 4, PANEL_Y + 4, PANEL_W, PANEL_H, 0x000000, 0.28)
-    .setOrigin(0).setScrollFactor(0).setDepth(10)
+  const [panelShadow, panel] = addPanel(scene, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, {
+    fill: UI_COLORS.panel,
+    alpha: 0.9,
+    border: UI_COLORS.borderBright,
+    depth: 10
+  })
+  miniMap.panelShadow = panelShadow
+  miniMap.panel = panel
 
-  miniMap.panel = scene.add.rectangle(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, 0x111111, 0.88)
-    .setOrigin(0).setStrokeStyle(2, 0xffffff).setScrollFactor(0).setDepth(10)
-
-  miniMap.mapBg = scene.add.rectangle(INNER_X, INNER_Y, INNER_W, INNER_H, 0x2a2a2a)
+  miniMap.mapBg = scene.add.rectangle(INNER_X, INNER_Y, INNER_W, INNER_H, 0x203126)
     .setOrigin(0).setScrollFactor(0).setDepth(10)
 
   miniMap.fogGraphics = scene.add.graphics()
     .setScrollFactor(0)
     .setDepth(11)
 
-  miniMap.playerDot = scene.add.circle(0, 0, 3, 0xffffff)
+  miniMap.playerDot = scene.add.circle(0, 0, 3, UI_COLORS.borderBright)
     .setScrollFactor(0)
     .setDepth(12)
 
   miniMap.drawFog = () => {
     miniMap.fogGraphics.clear()
-    miniMap.fogGraphics.fillStyle(0x000000, 0.85)
+    miniMap.fogGraphics.fillStyle(UI_COLORS.ink, 0.82)
 
     for (let col = 0; col < GRID_COLS; col++) {
       for (let row = 0; row < GRID_ROWS; row++) {

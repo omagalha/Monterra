@@ -1,29 +1,36 @@
+import { UI_COLORS, UI_FONT, addPanel } from './theme'
+
 export function createQuestTracker(scene) {
   const tracker = {}
 
   tracker.activeQuest = null
 
-  tracker.panel = scene.add.rectangle(195, 160, 360, 64, 0x111111, 0.82)
-    .setStrokeStyle(2, 0xffffff)
-    .setScrollFactor(0)
-    .setDepth(10)
-    .setVisible(false)
+  const [panelShadow, panel] = addPanel(scene, 24, 132, 342, 70, {
+    fill: UI_COLORS.panel,
+    alpha: 0.88,
+    border: UI_COLORS.borderBright,
+    depth: 10
+  })
+  tracker.panelShadow = panelShadow.setVisible(false)
+  tracker.panel = panel.setVisible(false)
 
-  tracker.titleText = scene.add.text(24, 138, '', {
+  tracker.titleText = scene.add.text(34, 142, '', {
     fontSize: '14px',
-    color: '#facc15',
-    fontFamily: 'monospace'
+    color: UI_COLORS.gold,
+    fontFamily: UI_FONT.body
   }).setScrollFactor(0).setDepth(10).setVisible(false)
 
-  tracker.progressText = scene.add.text(24, 160, '', {
+  tracker.progressText = scene.add.text(34, 164, '', {
     fontSize: '13px',
-    color: '#ffffff',
-    fontFamily: 'monospace'
+    color: UI_COLORS.text,
+    fontFamily: UI_FONT.body,
+    wordWrap: { width: 315 }
   }).setScrollFactor(0).setDepth(10).setVisible(false)
 
   tracker.show = (questState) => {
     tracker.activeQuest = questState
 
+    tracker.panelShadow.setVisible(true)
     tracker.panel.setVisible(true)
     tracker.titleText.setVisible(true)
     tracker.progressText.setVisible(true)
@@ -40,7 +47,7 @@ export function createQuestTracker(scene) {
     tracker.titleText.setText(`Quest: ${questState.title}`)
 
     const status = questState.completed
-      ? `Concluída - ${questState.description}`
+      ? `Concluida - ${questState.description}`
       : `${questState.progress}/${questState.requiredAmount} - ${questState.description}`
 
     tracker.progressText.setText(status)
@@ -48,6 +55,7 @@ export function createQuestTracker(scene) {
 
   tracker.hide = () => {
     tracker.activeQuest = null
+    tracker.panelShadow.setVisible(false)
     tracker.panel.setVisible(false)
     tracker.titleText.setVisible(false)
     tracker.progressText.setVisible(false)

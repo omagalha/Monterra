@@ -1,18 +1,19 @@
 import './style.css'
 import Phaser from 'phaser'
+import StartMenuScene from './game/scene/StartMenuScene'
 import MainScene from './game/scene/MainScene'
 
 const config = {
   type: Phaser.AUTO,
-  width: 844,
-  height: 390,
+  width: window.innerWidth,
+  height: window.innerHeight,
   backgroundColor: '#1a1a1a',
   parent: 'game-container',
   pixelArt: true,
-  scene: [MainScene],
+  scene: [StartMenuScene, MainScene],
   scale: {
-    mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH
+    mode: Phaser.Scale.NONE,
+    autoCenter: Phaser.Scale.NO_CENTER
   }
 }
 
